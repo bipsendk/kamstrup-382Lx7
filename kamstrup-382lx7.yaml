@@ -1,0 +1,158 @@
+##
+#
+# Kamstrup 382Lx7 Meter reader through IR eye from https://wiki.hal9k.dk/projects/kamstrup
+#
+# Code based on https://github.com/Hal9k-dk/kamstrup/tree/master/Software%20eksempler/kamstrup_powermeter
+#
+# Free to use for any non-commercial purposes.
+# 
+
+
+##
+# Change the values here, or the lookup key in your secrets.yaml file
+# See: https://esphome.io/guides/faq.html#how-do-i-use-my-home-assistant-secrets-yaml
+
+substitutions:
+  # WIFI
+  wifi_name: !secret wifi_ssid
+  wifi_pass: !secret wifi_password
+
+  # Displayed in HA frontend
+  friendly_name: "Kamstrup 382Lx7 Energy Meter"
+  friendly_short: "K382Lx7"
+
+esphome:
+  name: kamstrup-382lx7
+  platform: ESP32
+  board: nodemcu-32s
+  includes:
+    - k382lx7.h
+
+# Enable Home Assistant API
+#api:
+#  password: !secret esphome_api_password
+
+# See: https://esphome.io/components/wifi.html
+# Domain added in order to ensure correct DNS resolution
+wifi:
+  ssid: ${wifi_name}
+  password: ${wifi_pass}
+  domain: '.rg47c.lan'
+
+# Enable logging
+logger:
+
+ota:
+  # See: https://esphome.io/components/ota.html
+  password: "OtaPassword"
+  
+#
+# See: https://esphome.io/components/web_server.html
+# Simple debug log + states + FW upload
+web_server:
+  port: 80
+
+uart:
+  # UART2: GPIO16 is espRX and GPIO17 is espTX
+  id: uart_bus
+  tx_pin: 17
+  rx_pin: 16
+  # The Kamstrup 382Lx7 uses 9600 8N1 on the IR serial port
+  baud_rate: 9600
+
+binary_sensor:
+  # A "connected?" status sensor that - as long as sensor + mqtt + HA are working -
+  #   will always display "true". Allows for easy detection of sensor failure from HA
+  # See: https://esphome.io/components/binary_sensor/status.html
+  - platform: status
+    name: "${friendly_name} Status"
+
+sensor:
+  # A measurement that is useful for detecting wifi reception problems
+  # Make sure to set HA to retain this data for a very short time!
+  #
+  # See: https://community.home-assistant.io/t/iron-gate-sensor/97656/6
+  - platform: wifi_signal
+    name: "${friendly_name} Wifi Signal"
+    update_interval: 5s
+    filters:
+      - sliding_window_moving_average:
+          # hold 15 measurements, taken every 5 seconds
+          window_size: 15
+          # every 15 seconds, send the updated result..
+          send_every: 15
+
+  # See: https://esphome.io/custom/custom_component.html
+  - platform: custom
+    lambda: |-
+      auto k382Lx7 = new K382Lx7(id(uart_bus));
+      App.register_component(k382Lx7);
+      return {
+        k382Lx7->totEnergyIn_sensor, 
+        k382Lx7->EnergyInHiRes_sensor, 
+        k382Lx7->CurrentPower_sensor, 
+        k382Lx7->PowerP1In_sensor,
+        k382Lx7->PowerP2In_sensor,
+        k382Lx7->PowerP3In_sensor,
+        k382Lx7->CurrentP1_sensor, 
+        k382Lx7->CurrentP2_sensor,
+        k382Lx7->CurrentP3_sensor,
+        k382Lx7->MaxPower_sensor,
+        k382Lx7->VoltageP1_sensor, 
+        k382Lx7->VoltageP2_sensor,
+        k382Lx7->VoltageP3_sensor
+      };
+
+    sensors:
+      - name: "${friendly_short} Total Energy In"
+        unit_of_measurement: "kWh"
+        device_class: energy
+        accuracy_decimals: 2
+      - name: "${friendly_short} Energy In HiRes"
+        unit_of_measurement: "kWh"
+        accuracy_decimals: 3
+        device_class: energy
+      - name: "${friendly_short} Current Power"
+        unit_of_measurement: "kW"
+        accuracy_decimals: 2
+        device_class: power
+      - name: "${friendly_short} Power P1 In"
+        unit_of_measurement: "kW"
+        accuracy_decimals: 2
+        device_class: power
+      - name: "${friendly_short} Power P2 In"
+        unit_of_measurement: "kW"
+        accuracy_decimals: 2
+        device_class: power
+      - name: "${friendly_short} Power P3 In"
+        unit_of_measurement: "kW"
+        accuracy_decimals: 2
+        device_class: power
+      - name: "${friendly_short} Current P1"
+        unit_of_measurement: "A"
+        accuracy_decimals: 2
+        device_class: current
+      - name: "${friendly_short} Current P2"
+        unit_of_measurement: "A"
+        accuracy_decimals: 2
+        device_class: current
+      - name: "${friendly_short} Current P3"
+        unit_of_measurement: "A"
+        accuracy_decimals: 2
+        device_class: current
+      - name: "${friendly_short} Max Power"
+        unit_of_measurement: "kWh"
+        accuracy_decimals: 2
+        device_class: energy
+      - name: "${friendly_short} Voltage P1"
+        unit_of_measurement: "V"
+        device_class: voltage
+        accuracy_decimals: 2
+      - name: "${friendly_short} Voltage P2"
+        unit_of_measurement: "V"
+        accuracy_decimals: 2
+        device_class: voltage
+      - name: "${friendly_short} Voltage P3"
+        unit_of_measurement: "V"
+        accuracy_decimals: 2
+        device_class: voltage
