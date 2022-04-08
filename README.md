@@ -1,6 +1,6 @@
 # kamstrup-382Lx7
 
-This is a custom component for ESPhome - to read energy consumption from a Kamstrup 382Lx7 ennergy meter.
+This is a custom component for ESPhome - to read energy consumption from a Kamstrup 382Lx7 energy meter.
 
 IR eye used built like https://wiki.hal9k.dk/projects/kamstrup
 
