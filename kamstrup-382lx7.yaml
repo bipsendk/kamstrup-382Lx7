@@ -13,6 +13,8 @@
 # See: https://esphome.io/guides/faq.html#how-do-i-use-my-home-assistant-secrets-yaml
 
 substitutions:
+  device_description: "Measure your energy consumption using an IR eye on a Kamstrup 382Lx7 energy meter"
+  
   # WIFI
   wifi_name: !secret wifi_ssid
   wifi_pass: !secret wifi_password
@@ -29,8 +31,8 @@ esphome:
     - k382lx7.h
 
 # Enable Home Assistant API
-#api:
-#  password: !secret esphome_api_password
+api:
+  password: !secret esphome_api_password
 
 # See: https://esphome.io/components/wifi.html
 # Domain added in order to ensure correct DNS resolution
@@ -44,7 +46,7 @@ logger:
 
 ota:
   # See: https://esphome.io/components/ota.html
-  password: "OtaPassword"
+  password: "verySecret"
   
 #
 # See: https://esphome.io/components/web_server.html
@@ -89,11 +91,17 @@ sensor:
       App.register_component(k382Lx7);
       return {
         k382Lx7->totEnergyIn_sensor, 
+        k382Lx7->totEnergyOut_sensor, 
         k382Lx7->EnergyInHiRes_sensor, 
-        k382Lx7->CurrentPower_sensor, 
+        k382Lx7->EnergyOutHiRes_sensor, 
+        k382Lx7->CurrentPowerIn_sensor, 
         k382Lx7->PowerP1In_sensor,
         k382Lx7->PowerP2In_sensor,
         k382Lx7->PowerP3In_sensor,
+        k382Lx7->CurrentPowerOut_sensor, 
+        k382Lx7->PowerP1Out_sensor,
+        k382Lx7->PowerP2Out_sensor,
+        k382Lx7->PowerP3Out_sensor,
         k382Lx7->CurrentP1_sensor, 
         k382Lx7->CurrentP2_sensor,
         k382Lx7->CurrentP3_sensor,
@@ -108,11 +116,19 @@ sensor:
         unit_of_measurement: "kWh"
         device_class: energy
         accuracy_decimals: 2
+      - name: "${friendly_short} Total Energy Out"
+        unit_of_measurement: "kWh"
+        device_class: energy
+        accuracy_decimals: 2
       - name: "${friendly_short} Energy In HiRes"
         unit_of_measurement: "kWh"
         accuracy_decimals: 3
         device_class: energy
-      - name: "${friendly_short} Current Power"
+      - name: "${friendly_short} Energy Out HiRes"
+        unit_of_measurement: "kWh"
+        accuracy_decimals: 3
+        device_class: energy
+      - name: "${friendly_short} Current Power In"
         unit_of_measurement: "kW"
         accuracy_decimals: 2
         device_class: power
@@ -125,6 +141,22 @@ sensor:
         accuracy_decimals: 2
         device_class: power
       - name: "${friendly_short} Power P3 In"
+        unit_of_measurement: "kW"
+        accuracy_decimals: 2
+        device_class: power
+      - name: "${friendly_short} Current Power Out"
+        unit_of_measurement: "kW"
+        accuracy_decimals: 2
+        device_class: power
+      - name: "${friendly_short} Power P1 Out"
+        unit_of_measurement: "kW"
+        accuracy_decimals: 2
+        device_class: power
+      - name: "${friendly_short} Power P2 Out"
+        unit_of_measurement: "kW"
+        accuracy_decimals: 2
+        device_class: power
+      - name: "${friendly_short} Power P3 Out"
         unit_of_measurement: "kW"
         accuracy_decimals: 2
         device_class: power
@@ -155,4 +187,4 @@ sensor:
       - name: "${friendly_short} Voltage P3"
         unit_of_measurement: "V"
         accuracy_decimals: 2
-        device_class: voltage
+        device_class: voltage 
