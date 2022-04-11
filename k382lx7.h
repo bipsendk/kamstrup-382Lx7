@@ -12,6 +12,9 @@
 // Log tag
 static const char *TAG = "K382Lx7";
 
+// Set value to 1 if you deliver energy back to the grid, e.g. via Solar Panels
+#define ENERGYOUT 1
+
 // Kamstrup optical IR serial
 #define KAMTIMEOUT 500  // Kamstrup timeout after transmit
 
@@ -19,10 +22,26 @@ static const char *TAG = "K382Lx7";
 // Which Kamstrup register to query (together with short description). 
 // If you change registers/descriptions, you will probably have to change the
 // sensor defintions from line 53 - and the update code from line 182
-word const kregnums[] = { 0x0001,0x000d,0x03ff,0x0438,0x0439,0x043a,0x0434,0x0435,0x0436,0x0027,0x041e,0x041f,0x0420 };
-const char* kregstrings[]   = { "EnergyIn","EnergyInHiRes","CurrentPower","PowerP1In","PowerP2In","PowerP3In","CurrentP1","CurrentP2","CurrentP3","MaxPower","VoltageP1","VoltageP2","VoltageP3" };
+#if ENERGYOUT
+const word kregnums[] = { 0x0001,0x0002,0x000d,0x000e,0x03ff,0x0438,0x0439,0x043a,0x0400,0x0540,0x0541,0x0542,0x0434,0x0435,0x0436,0x0027,0x041e,0x041f,0x0420 };
+const char* kregstrings[]   = { "TotalEnergyIn","TotalEnergyOut","EnergyInHiRes","EnergyOutHiRes","CurrentPowerIn","PowerP1In","PowerP2In","PowerP3In","CurrentPowerOut","PowerP1Out","PowerP2Out","PowerP3Out","CurrentP1","CurrentP2","CurrentP3","MaxPower","VoltageP1","VoltageP2","VoltageP3" };
+#define NUMREGS 19     			// Number of registers above
+#else
+const word kregnums[] = { 0x0001,0x000d,0x03ff,0x0438,0x0439,0x043a,0x0434,0x0435,0x0436,0x0027,0x041e,0x041f,0x0420 };
+const char* kregstrings[]   = { "TotalEnergyIn","EnergyInHiRes","CurrentPower","PowerP1In","PowerP2In","PowerP3In","CurrentP1","CurrentP2","CurrentP3","MaxPower","VoltageP1","VoltageP2","VoltageP3" };
 #define NUMREGS 13     			// Number of registers above
+#endif
+
 float fResultSet[NUMREGS];		// Array to hold the results of the queries of the registers above
+
+// Units
+const char*  units[65] = {"","Wh","kWh","MWh","GWh","j","kj","Mj",
+  "Gj","Cal","kCal","Mcal","Gcal","varh","kvarh","Mvarh","Gvarh",
+        "VAh","kVAh","MVAh","GVAh","kW","kW","MW","GW","kvar","kvar","Mvar",
+        "Gvar","VA","kVA","MVA","GVA","V","A","kV","kA","C","K","l","m3",
+        "l/h","m3/h","m3xC","ton","ton/h","h","hh:mm:ss","yy:mm:dd","yyyy:mm:dd",
+        "mm:dd","","bar","RTC","ASCII","m3 x 10","ton xr 10","GJ x 10","minutes","Bitfield",
+        "s","ms","days","RTC-Q","Datetime"};
 
 bool bReceiveIR = false; 		// Flag to indicate to main loop whether we should try to receive data
 bool bSendIR = false; 			// Flag to indicate to main loop whether it is allowed to send IR
@@ -52,12 +71,23 @@ public:
 
   // For each of the values we wish to export, we define a sensor
   Sensor *totEnergyIn_sensor = new Sensor();
+#if ENERGYOUT
+  Sensor *totEnergyOut_sensor = new Sensor();
+#endif
   Sensor *EnergyInHiRes_sensor = new Sensor();
-  Sensor *CurrentPower_sensor = new Sensor();
-
+#if ENERGYOUT
+  Sensor *EnergyOutHiRes_sensor = new Sensor();
+#endif
+  Sensor *CurrentPowerIn_sensor = new Sensor();
   Sensor *PowerP1In_sensor = new Sensor();
   Sensor *PowerP2In_sensor = new Sensor();
   Sensor *PowerP3In_sensor = new Sensor();
+#if ENERGYOUT
+  Sensor *CurrentPowerOut_sensor = new Sensor();
+  Sensor *PowerP1Out_sensor = new Sensor();
+  Sensor *PowerP2Out_sensor = new Sensor();
+  Sensor *PowerP3Out_sensor = new Sensor();
+#endif
 
   Sensor *CurrentP1_sensor = new Sensor();
   Sensor *CurrentP2_sensor = new Sensor();
@@ -86,7 +116,7 @@ public:
 
 	// Check if we are allowed to send data to the Kamstrup meter to get data from a register
 	if(bReceiveIR == false && bSendIR == true) {
-		ESP_LOGD(TAG," - Querying register index %d - %s - %04x",kRegCnt,kregstrings[kRegCnt],kregnums[kRegCnt]);
+		ESP_LOGD(TAG," - Querying register index %d, description: %s - , hex value: 0x%04x",kRegCnt,kregstrings[kRegCnt],kregnums[kRegCnt]);
 		kamReadReg(kRegCnt);
 	}
 	
@@ -138,7 +168,7 @@ public:
 						// decode the received message
 						rval = kamDecode(kRegCnt,recvmsg);
 						fResultSet[kRegCnt]=rval;
-						ESP_LOGD(TAG,"Value logged successfully - %s - %f",kregstrings[kRegCnt],rval);
+						ESP_LOGD(TAG,"Value read and logged successfully - %s - %f",kregstrings[kRegCnt],rval);
 						kRegCnt++;			// Increment index counter for Kamstrup register queries
 					}
 
@@ -159,7 +189,7 @@ public:
 	// If neither sending or receiving is enabled - delay a bit before querying the meter again
 	if ( bSendIR == false && bReceiveIR == false ) {
 		delay(5);						// delay 5ms
-		if(cntIrPause++ > 200 ) {		// If we run through this loop 200 times, it is approx. 1 second
+		if(++cntIrPause > 200 ) {		// If we run through this loop 200 times, it is approx. 1 second
 			cntIrPause = 0;				// reset counter
 			bSendIR = true;				// Allow sending of IR again	
 			ESP_LOGD(TAG,"Set send mode on");
@@ -179,24 +209,35 @@ public:
   {
     // This is the actual sensor reading logic.
     ESP_LOGD(TAG, "Update has been called...");
+	unsigned short iCnt = 0;
     
-	totEnergyIn_sensor->publish_state(fResultSet[0]);
-    EnergyInHiRes_sensor->publish_state(fResultSet[1]);
-    CurrentPower_sensor->publish_state(fResultSet[2]);
-	
-	PowerP1In_sensor->publish_state(fResultSet[3]);
-	PowerP2In_sensor->publish_state(fResultSet[4]);
-	PowerP3In_sensor->publish_state(fResultSet[5]);
-	
-	CurrentP1_sensor->publish_state(fResultSet[6]);
-	CurrentP2_sensor->publish_state(fResultSet[7]);
-	CurrentP3_sensor->publish_state(fResultSet[8]);
+	totEnergyIn_sensor->publish_state(fResultSet[iCnt++]);
+#if ENERGYOUT
+	totEnergyOut_sensor->publish_state(fResultSet[iCnt++]);
+#endif
+    EnergyInHiRes_sensor->publish_state(fResultSet[iCnt++]);
+#if ENERGYOUT
+    EnergyOutHiRes_sensor->publish_state(fResultSet[iCnt++]);
+#endif
+    CurrentPowerIn_sensor->publish_state(fResultSet[iCnt++]);
+	PowerP1In_sensor->publish_state(fResultSet[iCnt++]);
+	PowerP2In_sensor->publish_state(fResultSet[iCnt++]);
+	PowerP3In_sensor->publish_state(fResultSet[iCnt++]);
+#if ENERGYOUT
+    CurrentPowerOut_sensor->publish_state(fResultSet[iCnt++]);
+	PowerP1Out_sensor->publish_state(fResultSet[iCnt++]);
+	PowerP2Out_sensor->publish_state(fResultSet[iCnt++]);
+	PowerP3Out_sensor->publish_state(fResultSet[iCnt++]);
+#endif	
+	CurrentP1_sensor->publish_state(fResultSet[iCnt++]);
+	CurrentP2_sensor->publish_state(fResultSet[iCnt++]);
+	CurrentP3_sensor->publish_state(fResultSet[iCnt++]);
 
-	MaxPower_sensor->publish_state(fResultSet[9]);
+	MaxPower_sensor->publish_state(fResultSet[iCnt++]);
 
-	VoltageP1_sensor->publish_state(fResultSet[10]);
-	VoltageP2_sensor->publish_state(fResultSet[11]);
-	VoltageP3_sensor->publish_state(fResultSet[12]);
+	VoltageP1_sensor->publish_state(fResultSet[iCnt++]);
+	VoltageP2_sensor->publish_state(fResultSet[iCnt++]);
+	VoltageP3_sensor->publish_state(fResultSet[iCnt++]);
   }
 
 private:
@@ -205,7 +246,7 @@ private:
 	// kamReadReg - read a Kamstrup register
 	float kamReadReg(unsigned short kreg)
 	{
-	  ESP_LOGD(TAG,"Sending request via IR");
+	  ESP_LOGD(TAG,"Sending request via IR to meter");
 
 	  // prepare message to send and send it
 	  byte sendmsg[] = { 0x3f, 0x10, 0x01, (byte)(kregnums[kreg] >> 8), (byte)(kregnums[kreg] & 0xff) };
@@ -265,6 +306,8 @@ private:
 	  if (msg[2] != (kregnums[kreg] >> 8) or msg[3] != (kregnums[kreg] & 0xff)) {
 		return false;
 	  }
+
+	  ESP_LOGD(TAG,"Decode: Unit of measured value: %s",units[msg[4]]);
 		
 	  // decode the mantissa
 	  long x = 0;
