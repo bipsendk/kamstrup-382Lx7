@@ -116,18 +116,22 @@ sensor:
         unit_of_measurement: "kWh"
         device_class: energy
         accuracy_decimals: 2
+        state_class: total_increasing
       - name: "${friendly_short} Total Energy Out"
         unit_of_measurement: "kWh"
         device_class: energy
         accuracy_decimals: 2
+        state_class: total_increasing
       - name: "${friendly_short} Energy In HiRes"
         unit_of_measurement: "kWh"
         accuracy_decimals: 3
         device_class: energy
+        state_class: total_increasing
       - name: "${friendly_short} Energy Out HiRes"
         unit_of_measurement: "kWh"
         accuracy_decimals: 3
         device_class: energy
+        state_class: total_increasing
       - name: "${friendly_short} Current Power In"
         unit_of_measurement: "kW"
         accuracy_decimals: 2
