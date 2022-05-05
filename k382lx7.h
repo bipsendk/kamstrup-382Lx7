@@ -12,11 +12,14 @@
 // Log tag
 static const char *TAG = "K382Lx7";
 
-// Set value to 1 if you deliver energy back to the grid, e.g. via Solar Panels
+// Set value to 1 if you deliver energy back to the grid, e.g. via Solar Panel
 #define ENERGYOUT 1
 
 // Kamstrup optical IR serial
 #define KAMTIMEOUT 500  // Kamstrup timeout after transmit
+
+// Number of attempts/retries for the same register
+#define REGISTER_RETRY_COUNT 1
 
 
 // Which Kamstrup register to query (together with short description). 
@@ -43,13 +46,15 @@ const char*  units[65] = {"","Wh","kWh","MWh","GWh","j","kj","Mj",
         "mm:dd","","bar","RTC","ASCII","m3 x 10","ton xr 10","GJ x 10","minutes","Bitfield",
         "s","ms","days","RTC-Q","Datetime"};
 
-bool bReceiveIR = false; 		// Flag to indicate to main loop whether we should try to receive data
-bool bSendIR = false; 			// Flag to indicate to main loop whether it is allowed to send IR
 unsigned long cntIrPause=0;  	// Counter for IR pause between readings
 
 // Serial data receiption variables
 unsigned long rxindex = 0;		// Index counter for received bytes
 unsigned long starttime;		// Millisecond variable used for detecting IR receive timeouts
+
+// Variables used for onlyu looping queries every 60 seconds 
+const unsigned int queryPeriod = 60000; // Interval in milliseconds
+unsigned long time_now =0;
 
 
 // Definition of functions
@@ -64,11 +69,17 @@ class K382Lx7 : public PollingComponent, public UARTDevice
 public:
   K382Lx7(UARTComponent *parent) : PollingComponent(60000), UARTDevice(parent){};
 
-  byte recvmsg[40];  		// buffer of bytes to hold the received data
-  byte rxdata[50];  		// buffer to hold received data
+  byte recvmsg[40];  			// buffer of bytes to hold the received data
+  byte rxdata[50];  			// buffer to hold received data
+  bool bResultValid[NUMREGS];	// Array to tell if we have valid measurements (after reboot)
 
-  unsigned short kRegCnt; 	// Counter to indicate where we are in the list of registers
+  unsigned short kRegCnt; 		// Counter to indicate where we are in the list of registers
+  unsigned short iRegRetryCnt;  // Retry counter - per register query
 
+  bool bReceiveIR = false; 		// Flag to indicate to main loop whether we should try to receive data
+  bool bSendIR = false; 			// Flag to indicate to main loop whether it is allowed to send IR
+  bool bQueryLoopActive = false; // Flag to indicate whether we are in the process of querying the meter for data
+ 
   // For each of the values we wish to export, we define a sensor
   Sensor *totEnergyIn_sensor = new Sensor();
 #if ENERGYOUT
@@ -103,29 +114,37 @@ public:
   {
     // ESPHome takes care of setting up the UART for us
     ESP_LOGD(TAG, "Setting up...");
+	for(unsigned int x=0;x<NUMREGS;x++) {
+		bResultValid[x]=false;
+	}
 
 	// setup kamstrup serial
 	pinMode(LED_BUILTIN, OUTPUT); 
 	kRegCnt = 0;			// Reset Kamstrup Register Counter
 	bReceiveIR = false;		// Disallow receiving IR
 	bSendIR = false;		// Disallow sending IR
+	bQueryLoopActive = false;	// Query loop not active
+	time_now = millis();		// Set current timestamp
+	iRegRetryCnt = 0;
   }
 
   void loop() override
   {
 
 	// Check if we are allowed to send data to the Kamstrup meter to get data from a register
-	if(bReceiveIR == false && bSendIR == true) {
-		ESP_LOGD(TAG," - Querying register index %d, description: %s - , hex value: 0x%04x",kRegCnt,kregstrings[kRegCnt],kregnums[kRegCnt]);
+	if(bReceiveIR == false && bSendIR == true && bQueryLoopActive == true) {
+		ESP_LOGD(TAG," - Querying register index %d, description: %s - regsiter hex value: 0x%04x",kRegCnt,kregstrings[kRegCnt],kregnums[kRegCnt]);
+		iRegRetryCnt++;		// Increment retry counter
 		kamReadReg(kRegCnt);
 	}
 	
 	// If send is disabled, and we are allowed to receive
-	if (bReceiveIR == true && bSendIR == false) { 
+	if (bReceiveIR == true && bSendIR == false && bQueryLoopActive == true) { 
 		if(millis()-starttime > KAMTIMEOUT) {		// Check if to much time has passed for receiving a reply
-			ESP_LOGD(TAG,"Timed out listening for data - setting IR receive false...");
+			ESP_LOGD(TAG,"Timed out listening for data - setting IR receive false, and try next register...");
 			bReceiveIR = false;						// Do not process more incoming IR
 			rxindex = 0;							// reset index counter for receiption array
+			kRegCnt++;								// Increment index counter for Kamstrup register queries
 		} else {
 			byte r = 0;
 			
@@ -158,8 +177,14 @@ public:
 					}
 					// Do CRC Check
 					if (crc_1021(recvmsg,j)) {
-						ESP_LOGD(TAG,"CRC error");
 						j = 0;
+						ESP_LOGW(TAG,"CRC error - iRegRetryCnt = %d",iRegRetryCnt);
+						if(iRegRetryCnt > REGISTER_RETRY_COUNT ) { // Check max number of retries per register
+							ESP_LOGD(TAG,"Retry count exceeded, move to next register...");
+							iRegRetryCnt = 0;
+							kRegCnt++;			// Increment index counter for Kamstrup register queries
+							bReceiveIR = false;
+						} 
 					}
 					
 					if(j != 0){
@@ -168,8 +193,10 @@ public:
 						// decode the received message
 						rval = kamDecode(kRegCnt,recvmsg);
 						fResultSet[kRegCnt]=rval;
+						bResultValid[kRegCnt]=true;
 						ESP_LOGD(TAG,"Value read and logged successfully - %s - %f",kregstrings[kRegCnt],rval);
 						kRegCnt++;			// Increment index counter for Kamstrup register queries
+						iRegRetryCnt = 0;	// Reset retry-counter
 					}
 
 					bReceiveIR = false;		// Finished receiving - enable sending
@@ -181,28 +208,43 @@ public:
 					bReceiveIR = false;		// Finished receiving - enable sending
 					ESP_LOGD(TAG,"rxindex exceeded!!!");
 					rxindex = 0;			// Reset receiption array index counter
+					flush();  				// flush serial buffer - we do not need more data...
 				}
 			}
 		}
 	}
 	
 	// If neither sending or receiving is enabled - delay a bit before querying the meter again
-	if ( bSendIR == false && bReceiveIR == false ) {
+	if ( bSendIR == false && bReceiveIR == false && bQueryLoopActive == true) {
 		delay(5);						// delay 5ms
-		if(++cntIrPause > 200 ) {		// If we run through this loop 200 times, it is approx. 1 second
+		if(++cntIrPause >= 100 ) {		// If we run through this loop 100 times, it is approx. 0.5 seconds
 			cntIrPause = 0;				// reset counter
 			bSendIR = true;				// Allow sending of IR again	
+			// iRegRetryCnt = 0;			// Reset register retry counter
 			ESP_LOGD(TAG,"Set send mode on");
 		}
-		if ( cntIrPause % 100 == 0 )	// Just for information - log that we are sleeping
+		if ( cntIrPause % 50 == 0 && cntIrPause != 0)	// Just for information - log that we are sleeping
 		{
 			ESP_LOGD(TAG,"sleeping...");
 		}
 	}
-	
+
 	if(kRegCnt == NUMREGS)  {			// If we have reached the lasr register...
 		kRegCnt= 0;						// Set index counter to zero - to start reading from the first register again
+		bQueryLoopActive = false; 		// Set looping inactive 
+		ESP_LOGD(TAG,"All registers have been queried - wait until 60 seconds has passed since first query in previous loop...");
 	}
+
+	// Only query every 60 seconds
+	if((unsigned long)(millis() - time_now) > queryPeriod) {
+		time_now = millis();		// set new timestamp
+		if ( bReceiveIR == false) {
+			ESP_LOGD(TAG,"Approx 60 seconds has passed since the last query loop was activated, and receive is not enabled ( %ld)",time_now);
+			bQueryLoopActive = true;	// Enable query looping
+			bSendIR = true;				// Make sure, than sending is enabled again...
+		}
+	}
+	
   }
 
   void update() override
@@ -211,33 +253,131 @@ public:
     ESP_LOGD(TAG, "Update has been called...");
 	unsigned short iCnt = 0;
     
-	totEnergyIn_sensor->publish_state(fResultSet[iCnt++]);
+	if(bResultValid[iCnt] == true && fResultSet[iCnt] != 0 ) {
+		totEnergyIn_sensor->publish_state(fResultSet[iCnt]);
+	} else {
+		totEnergyIn_sensor->publish_state(NAN);
+	}
+	iCnt++;
 #if ENERGYOUT
-	totEnergyOut_sensor->publish_state(fResultSet[iCnt++]);
+	if(bResultValid[iCnt] == true && fResultSet[iCnt] != 0 ) {
+		totEnergyOut_sensor->publish_state(fResultSet[iCnt]);
+	} else {
+		totEnergyOut_sensor->publish_state(NAN);
+	}
+	iCnt++;
 #endif
-    EnergyInHiRes_sensor->publish_state(fResultSet[iCnt++]);
+	if(bResultValid[iCnt] == true && fResultSet[iCnt] != 0 ) {
+		EnergyInHiRes_sensor->publish_state(fResultSet[iCnt]);
+	} else {
+		EnergyInHiRes_sensor->publish_state(NAN);
+	}
+	iCnt++;
 #if ENERGYOUT
-    EnergyOutHiRes_sensor->publish_state(fResultSet[iCnt++]);
+	if(bResultValid[iCnt] == true && fResultSet[iCnt] != 0 ) {
+		EnergyOutHiRes_sensor->publish_state(fResultSet[iCnt]);
+	} else {
+		EnergyOutHiRes_sensor->publish_state(NAN);
+	}
+	iCnt++;
 #endif
-    CurrentPowerIn_sensor->publish_state(fResultSet[iCnt++]);
-	PowerP1In_sensor->publish_state(fResultSet[iCnt++]);
-	PowerP2In_sensor->publish_state(fResultSet[iCnt++]);
-	PowerP3In_sensor->publish_state(fResultSet[iCnt++]);
+	if(bResultValid[iCnt] == true) {
+		CurrentPowerIn_sensor->publish_state(fResultSet[iCnt]);
+	} else {
+		CurrentPowerIn_sensor->publish_state(NAN);
+	}
+	iCnt++;
+	if(bResultValid[iCnt] == true) {
+		PowerP1In_sensor->publish_state(fResultSet[iCnt]);
+	} else {
+		PowerP1In_sensor->publish_state(NAN);
+	}
+	iCnt++;
+	if(bResultValid[iCnt] == true) {
+		PowerP2In_sensor->publish_state(fResultSet[iCnt]);
+	} else {
+		PowerP2In_sensor->publish_state(NAN);
+	}
+	iCnt++;
+	if(bResultValid[iCnt] == true) {
+		PowerP3In_sensor->publish_state(fResultSet[iCnt]);
+	} else {
+		PowerP3In_sensor->publish_state(NAN);
+	}
+	iCnt++;
 #if ENERGYOUT
-    CurrentPowerOut_sensor->publish_state(fResultSet[iCnt++]);
-	PowerP1Out_sensor->publish_state(fResultSet[iCnt++]);
-	PowerP2Out_sensor->publish_state(fResultSet[iCnt++]);
-	PowerP3Out_sensor->publish_state(fResultSet[iCnt++]);
+	if(bResultValid[iCnt] == true) {
+		CurrentPowerOut_sensor->publish_state(fResultSet[iCnt]);
+	} else {
+		CurrentPowerOut_sensor->publish_state(NAN);
+	}
+	iCnt++;
+	if(bResultValid[iCnt] == true) {
+		PowerP1Out_sensor->publish_state(fResultSet[iCnt]);
+	} else {
+		PowerP1Out_sensor->publish_state(NAN);
+	}
+	iCnt++;
+	if(bResultValid[iCnt] == true) {
+		PowerP2Out_sensor->publish_state(fResultSet[iCnt]);
+	} else {
+		PowerP2Out_sensor->publish_state(NAN);
+	}
+	iCnt++;
+	if(bResultValid[iCnt] == true) {
+		PowerP3Out_sensor->publish_state(fResultSet[iCnt]);
+	} else {
+		PowerP3Out_sensor->publish_state(NAN);
+	}
+	iCnt++;
 #endif	
-	CurrentP1_sensor->publish_state(fResultSet[iCnt++]);
-	CurrentP2_sensor->publish_state(fResultSet[iCnt++]);
-	CurrentP3_sensor->publish_state(fResultSet[iCnt++]);
+	if(bResultValid[iCnt] == true) {
+		CurrentP1_sensor->publish_state(fResultSet[iCnt]);
+	} else {
+		CurrentP1_sensor->publish_state(NAN);
+	}
+	iCnt++;
+	if(bResultValid[iCnt] == true) {
+		CurrentP2_sensor->publish_state(fResultSet[iCnt]);
+	} else {
+		CurrentP2_sensor->publish_state(NAN);
+	}
+	iCnt++;
+	if(bResultValid[iCnt] == true) {
+		CurrentP3_sensor->publish_state(fResultSet[iCnt]);
+	} else {
+		CurrentP3_sensor->publish_state(NAN);
+	}
+	iCnt++;
+	if(bResultValid[iCnt] == true) {
+		MaxPower_sensor->publish_state(fResultSet[iCnt]);
+	} else {
+		MaxPower_sensor->publish_state(NAN);
+	}
+	iCnt++;
+	if(bResultValid[iCnt] == true) {
+		VoltageP1_sensor->publish_state(fResultSet[iCnt]);
+	} else {
+		VoltageP1_sensor->publish_state(NAN);
+	}
+	iCnt++;
+	if(bResultValid[iCnt] == true) {
+		VoltageP2_sensor->publish_state(fResultSet[iCnt]);
+	} else {
+		VoltageP2_sensor->publish_state(NAN);
+	}
+	iCnt++;
+	if(bResultValid[iCnt] == true) {
+		VoltageP3_sensor->publish_state(fResultSet[iCnt]);
+	} else {
+		VoltageP3_sensor->publish_state(NAN);
+	}
 
-	MaxPower_sensor->publish_state(fResultSet[iCnt++]);
+	ESP_LOGD(TAG,"bReceiceIR: %d",bReceiveIR);
+	ESP_LOGD(TAG,"bSendIR: %d",bSendIR);
+	ESP_LOGD(TAG,"bQueryLoopActive: %d",bQueryLoopActive);
+	ESP_LOGD(TAG,"time(): %lu",millis());
 
-	VoltageP1_sensor->publish_state(fResultSet[iCnt++]);
-	VoltageP2_sensor->publish_state(fResultSet[iCnt++]);
-	VoltageP3_sensor->publish_state(fResultSet[iCnt++]);
   }
 
 private:
