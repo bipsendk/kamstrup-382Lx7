@@ -50,11 +50,11 @@ unsigned long cntIrPause=0;  	// Counter for IR pause between readings
 
 // Serial data receiption variables
 unsigned long rxindex = 0;		// Index counter for received bytes
-unsigned long starttime;		// Millisecond variable used for detecting IR receive timeouts
+uint64_t starttime;		// Millisecond variable used for detecting IR receive timeouts
 
 // Variables used for onlyu looping queries every 60 seconds 
-const unsigned int queryPeriod = 60000; // Interval in milliseconds
-unsigned long time_now =0;
+uint64_t queryPeriod = 60000; // Interval in milliseconds
+uint64_t time_now =0;
 
 
 // Definition of functions
@@ -124,7 +124,7 @@ public:
 	bReceiveIR = false;		// Disallow receiving IR
 	bSendIR = false;		// Disallow sending IR
 	bQueryLoopActive = false;	// Query loop not active
-	time_now = millis();		// Set current timestamp
+	time_now = (esp_timer_get_time()/1000);		// Set current timestamp
 	iRegRetryCnt = 0;
   }
 
@@ -140,7 +140,7 @@ public:
 	
 	// If send is disabled, and we are allowed to receive
 	if (bReceiveIR == true && bSendIR == false && bQueryLoopActive == true) { 
-		if(millis()-starttime > KAMTIMEOUT) {		// Check if to much time has passed for receiving a reply
+		if(((esp_timer_get_time()/1000)-starttime) > KAMTIMEOUT) {		// Check if to much time has passed for receiving a reply
 			ESP_LOGD(TAG,"Timed out listening for data - setting IR receive false, and try next register...");
 			bReceiveIR = false;						// Do not process more incoming IR
 			rxindex = 0;							// reset index counter for receiption array
@@ -236,10 +236,10 @@ public:
 	}
 
 	// Only query every 60 seconds
-	if((unsigned long)(millis() - time_now) > queryPeriod) {
-		time_now = millis();		// set new timestamp
+	if((uint64_t)((esp_timer_get_time()/1000) - time_now) > queryPeriod) {
+		time_now = (esp_timer_get_time()/1000);		// set new timestamp
 		if ( bReceiveIR == false) {
-			ESP_LOGD(TAG,"Approx 60 seconds has passed since the last query loop was activated, and receive is not enabled ( %ld)",time_now);
+			ESP_LOGD(TAG,"Approx 60 seconds has passed since the last query loop was activated, and receive is not enabled");
 			bQueryLoopActive = true;	// Enable query looping
 			bSendIR = true;				// Make sure, than sending is enabled again...
 		}
@@ -376,7 +376,7 @@ public:
 	ESP_LOGD(TAG,"bReceiceIR: %d",bReceiveIR);
 	ESP_LOGD(TAG,"bSendIR: %d",bSendIR);
 	ESP_LOGD(TAG,"bQueryLoopActive: %d",bQueryLoopActive);
-	ESP_LOGD(TAG,"time(): %lu",millis());
+	
 
   }
 
@@ -396,7 +396,7 @@ private:
 	  ESP_LOGD(TAG,"Enable IR receive and disable IR send");
 	  bSendIR = false; 
 	  flush();  // flush serial buffer - might contain noise
-	  starttime = millis();  // Set millis in order to detect timeout
+	  starttime = (esp_timer_get_time()/1000);  // Set millis in order to detect timeout
 	  return 0;
 	}
 
